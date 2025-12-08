@@ -25,4 +25,5 @@ backend/venv
 storage/pgadmin_data
 storage/postgres_data
 
+migrations/*_
 .env
