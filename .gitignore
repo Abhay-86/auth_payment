@@ -27,3 +27,5 @@ storage/postgres_data
 
 migrations/*_
 .env
+
+Temp/

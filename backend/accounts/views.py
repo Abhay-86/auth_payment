@@ -9,6 +9,7 @@ from drf_spectacular.utils import extend_schema
 from django.core.mail import send_mail
 from .google_auth import get_user_info_from_google
 from rest_framework.exceptions import AuthenticationFailed
+from payments.utils.payment_helpers import get_or_create_user_wallet
 
 from .serializers import (
     RegisterSerializer, 
@@ -20,6 +21,7 @@ from .serializers import (
 )
 from .models import CustomUser
 from django.contrib.auth.models import User
+from django.conf import settings
 
 class RegisterView(APIView):
     """User registration endpoint"""
@@ -71,7 +73,15 @@ class LoginView(APIView):
             #         status=status.HTTP_403_FORBIDDEN
             #     )
             refresh = RefreshToken.for_user(user)
-            access_token = str(refresh.access_token)
+            # add minimal user info claims to access token
+            access = refresh.access_token
+            access['email'] = user.email
+            access['username'] = user.username
+            try:
+                access['role'] = custom_user.role
+            except Exception:
+                access['role'] = 'USER'
+            access_token = str(access)
             refresh_token = str(refresh)
             response =  Response({
                 "message": "Login successful.",
@@ -80,13 +90,15 @@ class LoginView(APIView):
                 "refresh": refresh_token
             }, status=status.HTTP_200_OK)
         
+            # set cookies scoped to COOKIE_DOMAIN so they are sent across subdomains
             response.set_cookie(
                 key='access',
                 value=access_token,
                 httponly=True,
                 secure=True,      # True in production (HTTPS)
                 samesite='None',
-                max_age=60 * 60   # 1 hour
+                max_age=60 * 60,   # 1 hour
+                domain=getattr(settings, 'COOKIE_DOMAIN', None)
             )
             response.set_cookie(
                 key='refresh',
@@ -94,7 +106,8 @@ class LoginView(APIView):
                 httponly=True,
                 secure=True,
                 samesite='None',
-                max_age=24 * 60 * 60  # 1 day
+                max_age=24 * 60 * 60,  # 1 day
+                domain=getattr(settings, 'COOKIE_DOMAIN', None)
             )
             return response
         
@@ -175,7 +188,8 @@ class GoogleLoginView(APIView):
                     httponly=True,
                     secure=True,
                     samesite='None',
-                    max_age=60 * 60  # 1 hour
+                    max_age=60 * 60,  
+                    domain=getattr(settings, 'COOKIE_DOMAIN', None)
                 )
                 response.set_cookie(
                     key='refresh',
@@ -183,7 +197,8 @@ class GoogleLoginView(APIView):
                     httponly=True,
                     secure=True,
                     samesite='None',
-                    max_age=24 * 60 * 60  # 1 day
+                    max_age=24 * 60 * 60,  
+                    domain=getattr(settings, 'COOKIE_DOMAIN', None)
                 )
                 
                 return response
@@ -210,7 +225,6 @@ class ProfileView(APIView):
         user = request.user
         
         # Ensure user has a wallet (create if doesn't exist)
-        from payments.utils.payment_helpers import get_or_create_user_wallet
         get_or_create_user_wallet(user)
         
         # Use select_related to optimize database queries
@@ -329,13 +343,15 @@ class CookieTokenRefreshView(TokenRefreshView):
 
         access_token = serializer.validated_data.get('access')
         response = Response({'access': access_token}, status=status.HTTP_200_OK)
+        # attach domain on refresh as well
         response.set_cookie(
             key='access',
             value=access_token,
             httponly=True,
             secure=True,
             samesite='None',
-            max_age=60 * 60  # 1 hour
+            max_age=60 * 60,  # 1 hour
+            domain=getattr(settings, 'COOKIE_DOMAIN', None)
         )
         return response
 

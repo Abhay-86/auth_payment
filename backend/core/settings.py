@@ -217,6 +217,9 @@ FRONTEND_URL = config("FRONTEND_URL", default="http://localhost:3000")
 # Backend URL for OAuth callbacks
 BACKEND_URL = config("BACKEND_URL", default="http://127.0.0.1:8000")
 
+# Cookie domain to share cookies across subdomains (e.g. .aurasim.ai)
+COOKIE_DOMAIN = config("COOKIE_DOMAIN", default=".aurasim.ai")
+
 # Google OAuth Configuration
 GOOGLE_CLIENT_ID = config("GOOGLE_CLIENT_ID", default="")
 GOOGLE_CLIENT_SECRET = config("GOOGLE_CLIENT_SECRET", default="")
