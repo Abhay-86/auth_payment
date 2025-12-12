@@ -47,8 +47,11 @@ class EmailOTP(models.Model):
 
 class IsCustomAdmin(BasePermission):
     def has_permission(self, request, view):
+        custom = getattr(request.user, "custom_user", None)
+        role = getattr(custom, "role", None)
+        role = role.lower() if role else None
         return (
-            request.user
-            and hasattr(request.user, 'custom_user')
-            and request.user.custom_user.role == 'ADMIN'
+            request.user.is_authenticated
+            and custom
+            and role == "admin"
         )

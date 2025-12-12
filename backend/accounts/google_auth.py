@@ -61,7 +61,7 @@ def get_user_info_from_google(token: str) -> dict:
         'email': idinfo.get('email'),
         'first_name': idinfo.get('given_name', ''),
         'last_name': idinfo.get('family_name', ''),
-        'google_id': idinfo.get('sub'),
+        'google_id': idinfo.get('sub'),  # Google's unique user ID
         'email_verified': idinfo.get('email_verified', False),
         'picture': idinfo.get('picture', ''),
     }

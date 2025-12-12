@@ -32,6 +32,22 @@ ALLOWED_HOSTS = config('ALLOWED_HOSTS', default='', cast=Csv())
 CORS_ALLOW_ALL_ORIGINS = config('CORS_ALLOW_ALL_ORIGINS', default=True, cast=bool)
 CORS_ALLOW_CREDENTIALS = config('CORS_ALLOW_CREDENTIALS', default=True, cast=bool)
 
+# Optional (for API testing)
+CORS_ALLOW_HEADERS = [
+    "accept",
+    "accept-encoding",
+    "authorization",
+    "content-type",
+    "dnt",
+    "origin",
+    "user-agent",
+    "x-csrftoken",
+    "x-requested-with",
+]
+
+# Allow iframe embedding for PDF preview (Chrome compatible)
+X_FRAME_OPTIONS = 'SAMEORIGIN'
+
 # Application definition
 
 DJANGO_APPS = [
@@ -49,12 +65,13 @@ THIRD_PARTY_APPS = [
     'drf_spectacular',
 ]
 
-MYAPPS = [
-    'core',
+MY_APPS = [
     'accounts',
+    'features',
+    'payments',
 ]
 
-INSTALLED_APPS = DJANGO_APPS + THIRD_PARTY_APPS + MYAPPS
+INSTALLED_APPS = DJANGO_APPS + THIRD_PARTY_APPS + MY_APPS
 
 MIDDLEWARE = [
     'corsheaders.middleware.CorsMiddleware', 
@@ -71,17 +88,38 @@ ROOT_URLCONF = 'core.urls'
 
 REST_FRAMEWORK = {
     'DEFAULT_SCHEMA_CLASS': 'drf_spectacular.openapi.AutoSchema',
+    'DEFAULT_PERMISSION_CLASSES': [
+        'rest_framework.permissions.IsAuthenticated',
+    ],
     'DEFAULT_AUTHENTICATION_CLASSES': (
+        'accounts.authentication.CookieJWTAuthentication',
         'rest_framework_simplejwt.authentication.JWTAuthentication',
-    )
+    ),
+}
+
+SPECTACULAR_SETTINGS = {
+    'TITLE': 'Auth Payment API',
+    'DESCRIPTION': 'API documentation for your Django project',
+    'VERSION': '1.0.0',
+    'SERVE_INCLUDE_SCHEMA': False,
+    'SERVERS': [{'url': 'http://127.0.0.1:8000'}],
+    'SECURITY': [{'BearerAuth': []}],
+    'COMPONENTS': {
+        'securitySchemes': {
+            'BearerAuth': {
+                'type': 'http',
+                'scheme': 'bearer',
+                'bearerFormat': 'JWT',
+            }
+        }
+    }
 }
 
 SIMPLE_JWT = {
-    'ACCESS_TOKEN_LIFETIME': timedelta(minutes=5),
+    'ACCESS_TOKEN_LIFETIME': timedelta(minutes=60),
     'REFRESH_TOKEN_LIFETIME': timedelta(days=1),
     'ROTATE_REFRESH_TOKENS': False,
     'BLACKLIST_AFTER_ROTATION': True,
-    'UPDATE_LAST_LOGIN': False,
     'AUTH_HEADER_TYPES': ('Bearer',),
     'SIGNING_KEY': SECRET_KEY,
 }
@@ -169,6 +207,16 @@ EMAIL_HOST_USER = config("EMAIL_HOST_USER", default="abhay.singh@auraml.com")
 EMAIL_HOST_PASSWORD = config("EMAIL_HOST_PASSWORD", default="vilvbzcxzmviouwl")  # app password, not Gmail login
 DEFAULT_FROM_EMAIL = EMAIL_HOST_USER
 
+RAZORPAY_KEY_ID = config("RAZORPAY_KEY_ID", default="")
+RAZORPAY_KEY_SECRET = config("RAZORPAY_KEY_SECRET", default="")
+RAZORPAY_WEBHOOK_SECRET = config("RAZORPAY_WEBHOOK_SECRET", default="")
 
+# Frontend URL for payment callbacks
+FRONTEND_URL = config("FRONTEND_URL", default="http://localhost:3000")
+
+# Backend URL for OAuth callbacks
+BACKEND_URL = config("BACKEND_URL", default="http://127.0.0.1:8000")
+
+# Google OAuth Configuration
 GOOGLE_CLIENT_ID = config("GOOGLE_CLIENT_ID", default="")
 GOOGLE_CLIENT_SECRET = config("GOOGLE_CLIENT_SECRET", default="")

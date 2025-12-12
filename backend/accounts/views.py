@@ -9,7 +9,6 @@ from drf_spectacular.utils import extend_schema
 from django.core.mail import send_mail
 from .google_auth import get_user_info_from_google
 from rest_framework.exceptions import AuthenticationFailed
-# from accounts.gmail_oauth import GmailOAuthService
 
 from .serializers import (
     RegisterSerializer, 
@@ -34,25 +33,9 @@ class RegisterView(APIView):
             try:
                 with transaction.atomic():
                     user = serializer.save()
-                    
-                    # Automatically generate and send OTP
-                    from .models import EmailOTP
-                    from django.conf import settings
-                    otp_code = EmailOTP.generate_otp()
-                    EmailOTP.objects.create(user=user, otp=otp_code)
-                    
-                    # Send OTP email
-                    send_mail(
-                        subject="Verify Your Email - OTP Code",
-                        message=f"Welcome! Your verification code is: {otp_code}\n\nThis code will expire in 5 minutes.",
-                        from_email=settings.DEFAULT_FROM_EMAIL,
-                        recipient_list=[user.email],
-                        fail_silently=False,
-                    )
-                    
                     return Response(
                         {
-                            "message": "User registered successfully! Please check your email for the verification code.",
+                            "message": "User registered successfully!",
                             "user": UserSerializer(user).data
                         },
                         status=status.HTTP_201_CREATED
@@ -225,7 +208,15 @@ class ProfileView(APIView):
     @extend_schema(responses={200: UserSerializer})
     def get(self, request):
         user = request.user
-        serializer = UserSerializer(user)
+        
+        # Ensure user has a wallet (create if doesn't exist)
+        from payments.utils.payment_helpers import get_or_create_user_wallet
+        get_or_create_user_wallet(user)
+        
+        # Use select_related to optimize database queries
+        user_with_wallet = User.objects.select_related('custom_user', 'wallet').get(id=user.id)
+        
+        serializer = UserSerializer(user_with_wallet)
         
         return Response({
             'success': True,
@@ -234,6 +225,92 @@ class ProfileView(APIView):
         }, status=status.HTTP_200_OK)
 
 
+class DashboardView(APIView):
+    """Dashboard endpoint with comprehensive user data including wallet and features"""
+    permission_classes = [IsAuthenticated]
+
+    @extend_schema(responses={200: dict})
+    def get(self, request):
+        user = request.user
+        
+        # Ensure user has a wallet
+        from payments.utils.payment_helpers import get_or_create_user_wallet
+        wallet = get_or_create_user_wallet(user)
+        
+        # Get user with related data
+        user_with_wallet = User.objects.select_related('custom_user', 'wallet').get(id=user.id)
+        user_serializer = UserSerializer(user_with_wallet)
+        
+        # Get recent transactions
+        from payments.models import CoinTransaction, PaymentOrder
+        recent_transactions = CoinTransaction.objects.filter(user=user).order_by('-created_at')[:5]
+        recent_orders = PaymentOrder.objects.filter(user=user).order_by('-created_at')[:3]
+        
+        # Get active features
+        from features.models import UserFeature
+        active_features = UserFeature.objects.filter(
+            user=user, 
+            is_active=True
+        ).select_related('feature')
+        
+        # Prepare transaction data
+        transaction_data = []
+        for transaction in recent_transactions:
+            transaction_data.append({
+                'transaction_id': transaction.transaction_id,
+                'type': transaction.transaction_type,
+                'amount': transaction.amount,
+                'balance_after': transaction.balance_after,
+                'description': transaction.description,
+                'created_at': transaction.created_at
+            })
+        
+        # Prepare order data
+        order_data = []
+        for order in recent_orders:
+            order_data.append({
+                'order_id': order.order_id,
+                'amount': str(order.amount),
+                'coins_to_credit': order.coins_to_credit,
+                'status': order.status,
+                'created_at': order.created_at
+            })
+        
+        # Prepare feature data
+        feature_data = []
+        for user_feature in active_features:
+            feature_data.append({
+                'feature_id': user_feature.feature.id,
+                'feature_name': user_feature.feature.name,
+                'feature_code': user_feature.feature.code,
+                'description': user_feature.feature.description,
+                'activated_on': user_feature.activated_on,
+                'expires_on': user_feature.expires_on,
+                'is_valid': user_feature.is_valid()
+            })
+        
+        return Response({
+            'success': True,
+            'dashboard': {
+                'user': user_serializer.data,
+                'wallet': {
+                    'coin_balance': wallet.coin_balance,
+                    'total_coins_earned': wallet.total_coins_earned,
+                    'total_coins_spent': wallet.total_coins_spent,
+                    'total_money_spent': str(wallet.total_money_spent)
+                },
+                'recent_transactions': transaction_data,
+                'recent_orders': order_data,
+                'active_features': feature_data,
+                'stats': {
+                    'total_orders': PaymentOrder.objects.filter(user=user).count(),
+                    'successful_orders': PaymentOrder.objects.filter(user=user, status='PAID').count(),
+                    'total_transactions': CoinTransaction.objects.filter(user=user).count(),
+                    'active_features_count': active_features.count()
+                }
+            },
+            'message': 'Dashboard data retrieved successfully'
+        }, status=status.HTTP_200_OK)
 class CookieTokenRefreshView(TokenRefreshView):
     """Custom refresh endpoint that reads the refresh token from HttpOnly cookie."""
     permission_classes = [AllowAny]
@@ -312,6 +389,15 @@ class VerifyOTPEmailView(APIView):
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
 
+# ============================================
+# Gmail OAuth Views
+# ============================================
+
+from .gmail_oauth import GmailOAuthService
+from django.utils import timezone
+from django.conf import settings
+
+
 class GmailAuthURLView(APIView):
     """
     Generate Gmail OAuth authorization URL
@@ -343,4 +429,158 @@ class GmailAuthURLView(APIView):
             "success": True,
             "auth_url": auth_url,
             "message": "Redirect user to this URL to grant Gmail permissions"
+        }, status=status.HTTP_200_OK)
+
+
+class GmailCallbackView(APIView):
+    """
+    Handle Gmail OAuth callback and save refresh token
+    
+    GET /api/accounts/gmail/callback/?code=XXX&state=user_id
+    
+    This endpoint is called by Google after user grants permission
+    """
+    permission_classes = [AllowAny]
+    authentication_classes = []
+    
+    @extend_schema(
+        responses={200: dict},
+        description="OAuth callback endpoint - called by Google"
+    )
+    def get(self, request):
+        code = request.query_params.get("code")
+        user_id = request.query_params.get("state")
+        
+        if not code or not user_id:
+            return Response(
+                {"error": "Missing code or state parameter"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        try:
+            # Get user
+            user = User.objects.get(id=user_id)
+            custom_user = user.custom_user
+            
+            # Exchange code for tokens
+            redirect_uri = f"{settings.BACKEND_URL}/api/accounts/gmail/callback/"
+            token_data = GmailOAuthService.exchange_code_for_token(
+                code=code,
+                redirect_uri=redirect_uri
+            )
+            
+            refresh_token = token_data.get("refresh_token")
+            
+            if not refresh_token:
+                return Response(
+                    {
+                        "error": "No refresh token returned. Please revoke access in Google Account settings and try again.",
+                        "help_url": "https://myaccount.google.com/permissions"
+                    },
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            
+            # Save refresh token
+            custom_user.gmail_refresh_token = refresh_token
+            custom_user.gmail_permission_granted_at = timezone.now()
+            custom_user.save()
+            
+            # Redirect to frontend success page
+            frontend_url = f"{settings.FRONTEND_URL}/settings/gmail-success"
+            return Response({
+                "success": True,
+                "message": "Gmail permission granted successfully!",
+                "redirect_url": frontend_url
+            }, status=status.HTTP_200_OK)
+            
+        except User.DoesNotExist:
+            return Response(
+                {"error": "User not found"},
+                status=status.HTTP_404_NOT_FOUND
+            )
+        except Exception as e:
+            return Response(
+                {"error": f"Failed to process OAuth callback: {str(e)}"},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
+
+class GmailAcceptPrivacyView(APIView):
+    """
+    Accept Gmail privacy policy
+    
+    POST /api/accounts/gmail/accept-privacy/
+    
+    User must accept privacy policy before connecting Gmail
+    """
+    permission_classes = [IsAuthenticated]
+    
+    @extend_schema(
+        responses={200: dict},
+        description="Accept Gmail privacy policy"
+    )
+    def post(self, request):
+        """Mark that user has accepted Gmail privacy policy"""
+        user = request.user
+        custom_user = user.custom_user
+        
+        custom_user.gmail_privacy_accepted = True
+        custom_user.save()
+        
+        return Response({
+            "success": True,
+            "message": "Privacy policy accepted",
+            "privacy_accepted": True
+        }, status=status.HTTP_200_OK)
+
+
+class GmailPermissionStatusView(APIView):
+    """
+    Check if user has granted Gmail permission
+    
+    GET /api/accounts/gmail/status/
+    
+    Returns:
+        {
+            "success": true,
+            "has_permission": true,
+            "granted_at": "2025-11-25T10:30:00Z",
+            "user_email": "user@gmail.com"
+        }
+    """
+    permission_classes = [IsAuthenticated]
+    
+    @extend_schema(
+        responses={200: dict},
+        description="Check Gmail permission status for authenticated user"
+    )
+    def get(self, request):
+        user = request.user
+        custom_user = user.custom_user
+        
+        return Response({
+            "success": True,
+            "has_permission": custom_user.has_gmail_permission(),
+            "privacy_accepted": custom_user.gmail_privacy_accepted,
+            "granted_at": custom_user.gmail_permission_granted_at,
+            "user_email": user.email
+        }, status=status.HTTP_200_OK)
+    
+    @extend_schema(
+        responses={200: dict},
+        description="Revoke Gmail permission"
+    )
+    def delete(self, request):
+        """Revoke Gmail permission"""
+        user = request.user
+        custom_user = user.custom_user
+        
+        custom_user.gmail_refresh_token = None
+        custom_user.gmail_permission_granted_at = None
+        custom_user.gmail_privacy_accepted = False  # Reset privacy acceptance
+        custom_user.save()
+        
+        return Response({
+            "success": True,
+            "message": "Gmail permission revoked successfully"
         }, status=status.HTTP_200_OK)

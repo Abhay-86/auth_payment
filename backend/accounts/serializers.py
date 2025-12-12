@@ -58,12 +58,43 @@ class UserSerializer(serializers.ModelSerializer):
     role = serializers.CharField(source='custom_user.role', read_only=True)
     is_verified = serializers.BooleanField(source='custom_user.is_verified', read_only=True)
     
+    # Wallet information
+    coin_balance = serializers.SerializerMethodField()
+    total_coins_earned = serializers.SerializerMethodField()
+    total_coins_spent = serializers.SerializerMethodField()
+    total_money_spent = serializers.SerializerMethodField()
+    
     class Meta:
         model = User
         fields = (
             'id', 'username', 'email', 'first_name', 'last_name', 
             'phone_number', 'role', 'is_verified',
+            'coin_balance', 'total_coins_earned', 'total_coins_spent', 'total_money_spent'
         )
+    
+    def get_coin_balance(self, obj):
+        """Get user's current coin balance"""
+        if hasattr(obj, 'wallet'):
+            return obj.wallet.coin_balance
+        return 0
+    
+    def get_total_coins_earned(self, obj):
+        """Get user's total coins earned"""
+        if hasattr(obj, 'wallet'):
+            return obj.wallet.total_coins_earned
+        return 0
+    
+    def get_total_coins_spent(self, obj):
+        """Get user's total coins spent"""
+        if hasattr(obj, 'wallet'):
+            return obj.wallet.total_coins_spent
+        return 0
+    
+    def get_total_money_spent(self, obj):
+        """Get user's total money spent"""
+        if hasattr(obj, 'wallet'):
+            return str(obj.wallet.total_money_spent)
+        return "0.00"
 
 class LoginSerializer(serializers.Serializer):
     email = serializers.EmailField(required=True)
@@ -113,11 +144,10 @@ class SendOTPSerializer(serializers.Serializer):
 
         # send the OTP email
         from django.core.mail import send_mail
-        from django.conf import settings
         send_mail(
             subject="Your OTP Code",
             message=f"Your verification code is {otp_code}",
-            from_email=settings.DEFAULT_FROM_EMAIL,
+            from_email="abhay.singh@auraml.com",
             recipient_list=[email],
         )
         return {"message": "OTP sent successfully!"}
