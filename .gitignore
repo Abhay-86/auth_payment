@@ -20,3 +20,10 @@ rad.json
 *.flf
 #Test results file
 TestResults.xml
+backend/venv
+
+storage/pgadmin_data
+storage/postgres_data
+
+migrations/*_
+.env
